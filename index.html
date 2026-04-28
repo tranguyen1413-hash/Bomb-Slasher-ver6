@@ -381,16 +381,21 @@
                 let baseScale = Math.min(canvas.width, canvas.height) / 800;
                 baseScale = Math.max(0.6, Math.min(baseScale, 1.2)); 
                 
-                // Độ khó tăng dần
-                let diffFactor = 1 + (score / 150);
-                if (score >= 100) {
-                    diffFactor += 0.8; // Mức độ siêu khó sau 100 điểm
+                // ĐIỀU CHỈNH ĐỘ KHÓ TRUNG BÌNH
+                // Tốc độ rơi tăng rất chậm rãi
+                let diffFactor = 1 + (score / 300);
+                if (score >= 200) {
+                    diffFactor += 0.3; // Mức độ khó thực sự bắt đầu từ 200 điểm
                 }
                 
                 this.baseScale = baseScale; 
                 this.vy = rnd(-15, -12) * baseScale * diffFactor;
                 
-                let bombChance = score >= 100 ? 0.85 : 0.65;
+                // Tỉ lệ xuất hiện bom cũng tăng từ từ
+                let bombChance = 0.60;
+                if (score >= 100) bombChance = 0.65; // Ở 100đ, vẫn khá dễ thở (65%)
+                if (score >= 200) bombChance = 0.75; // Qua 200đ, bom mới xuất hiện dày đặc
+                
                 this.isBomb = Math.random() < bombChance;
                 
                 this.emoji = this.isBomb ? BOMB : FRUITS[Math.floor(Math.random() * FRUITS.length)];
@@ -495,9 +500,13 @@
         }
 
         function spawn() {
-            let rate = Math.max(30, 90 - (score / 5)); 
+            // Làm mượt đường cong thời gian spawn để không bị sốc độ khó
+            let rate = Math.max(40, 90 - (score / 4)); 
             if (score >= 100) {
-                rate = Math.max(12, 40 - ((score - 100) / 3)); 
+                rate = Math.max(30, 65 - ((score - 100) / 4)); // Ở 100đ, đồ thị hạ độ khó xuống cho dễ thở hơn
+            }
+            if (score >= 200) {
+                rate = Math.max(15, 40 - ((score - 200) / 3)); // Mưa bom thực sự sau mốc 200 điểm
             }
             if (frame % Math.floor(rate) === 0) targets.push(new Target());
         }
