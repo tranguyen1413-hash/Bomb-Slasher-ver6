@@ -43,6 +43,7 @@
 
         // --- Leaderboard Logic ---
         let topScores = [];
+        window.allGlobalScores = []; // Lưu toàn bộ điểm để tính Rank
         window.isSubmittingScore = false;
 
         function loadGlobalLeaderboard() {
@@ -52,8 +53,16 @@
                 let scores = [];
                 snapshot.forEach(doc => { scores.push({ id: doc.id, ...doc.data() }); });
                 scores.sort((a, b) => b.score - a.score);
-                topScores = scores.slice(0, 5); // Lấy top 5
+                
+                window.allGlobalScores = scores;
+                topScores = scores.slice(0, 5); // Lấy top 5 hiển thị danh sách
+                
                 renderLeaderboard();
+                
+                // Cập nhật lại rank hiện tại nếu đang ở màn Game Over
+                if (window.updateCurrentRankDisplay && document.getElementById('gameOverScreen').classList.contains('hidden') === false) {
+                    window.updateCurrentRankDisplay();
+                }
             }, (error) => {
                 const errorMsg = '<li class="text-gray-400 text-sm py-2">Không tải được dữ liệu</li>';
                 if(document.getElementById('leaderboardList')) document.getElementById('leaderboardList').innerHTML = errorMsg;
@@ -88,7 +97,7 @@
                 let badge = index === 0 ? '👑' : index === 1 ? '🥈' : index === 2 ? '🥉' : '';
                 return `<li class="flex justify-between items-center py-1.5 border-b border-gray-700 last:border-0">
                             <span class="text-gray-300 flex items-center gap-1">
-                                <span class="w-5 inline-block text-center">${badge || (index+1)}</span> 
+                                <span class="w-6 inline-block text-center">${badge || (index+1)}</span> 
                                 <span class="font-semibold truncate w-24 text-left">${s.name}</span>
                             </span>
                             <span class="text-yellow-400 font-bold">${s.score}</span>
@@ -136,6 +145,9 @@
         .custom-scrollbar::-webkit-scrollbar { width: 4px; }
         .custom-scrollbar::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.2); border-radius: 4px; }
         .custom-scrollbar::-webkit-scrollbar-thumb { background: rgba(96, 165, 250, 0.5); border-radius: 4px; }
+        
+        /* Hiệu ứng nổi bật cho dòng xếp hạng của bản thân */
+        .highlight-rank { background: linear-gradient(90deg, rgba(59,130,246,0.3) 0%, rgba(30,58,138,0.1) 100%); border: 1px solid rgba(96, 165, 250, 0.5); }
     </style>
 </head>
 <body>
@@ -199,6 +211,16 @@
                         <h3 class="text-blue-400 font-bold mb-2 border-b border-gray-600 pb-1 text-xs uppercase flex items-center justify-center gap-2">
                             <span class="live-indicator"></span> Top Toàn Cầu
                         </h3>
+                        
+                        <!-- Thanh hiển thị vị trí (Rank) hiện tại của người chơi -->
+                        <div id="myCurrentRankBox" class="highlight-rank rounded mb-2 py-1.5 px-2 flex justify-between items-center hidden shadow-md">
+                            <span class="text-blue-100 flex items-center gap-1 text-xs">
+                                <span class="w-6 inline-block text-center font-extrabold text-yellow-300 drop-shadow" id="currentRankBadge">#?</span> 
+                                <span class="font-bold truncate w-24 text-left text-[11px] uppercase tracking-wider">Điểm của bạn</span>
+                            </span>
+                            <span class="text-yellow-300 font-black text-xs drop-shadow" id="currentRankScore">0</span>
+                        </div>
+
                         <ul id="gameOverLeaderboardList" class="flex flex-col justify-start text-xs max-h-32 overflow-y-auto custom-scrollbar">
                             <li class="text-gray-500 italic">Đang tải...</li>
                         </ul>
@@ -229,6 +251,36 @@
         
         let isMusicPlaying = true;
         let audioCtx = null;
+
+        // Tính toán thứ hạng hiện tại của người chơi
+        window.updateCurrentRankDisplay = function() {
+            const box = document.getElementById('myCurrentRankBox');
+            const badge = document.getElementById('currentRankBadge');
+            const scoreDisp = document.getElementById('currentRankScore');
+            
+            if (!box) return;
+            
+            // Chỉ hiển thị ở màn hình GameOver
+            if (state !== 'GAMEOVER') {
+                box.classList.add('hidden');
+                return;
+            }
+            
+            box.classList.remove('hidden');
+            scoreDisp.innerText = score;
+
+            let rank = 1;
+            // Tính hạng bằng cách đếm xem có bao nhiêu người điểm lớn hơn
+            for (let i = 0; i < window.allGlobalScores.length; i++) {
+                if (score >= window.allGlobalScores[i].score) {
+                    break;
+                }
+                rank++;
+            }
+            
+            let badgeText = rank === 1 ? '👑' : rank === 2 ? '🥈' : rank === 3 ? '🥉' : `#${rank}`;
+            badge.innerText = badgeText;
+        };
 
         // Lazy initialize AudioContext để đảm bảo chạy mượt trên mọi trình duyệt
         function getAudioCtx() {
@@ -605,6 +657,7 @@
             screens.start.classList.add('hidden');
             screens.gameOver.classList.add('hidden');
             screens.hud.classList.remove('opacity-0');
+            document.getElementById('myCurrentRankBox').classList.add('hidden'); // Ẩn thanh rank cũ
             document.body.style.cursor = 'crosshair';
             
             submitForm.classList.add('hidden');
@@ -626,6 +679,9 @@
             }, 50);
 
             texts.finalScore.innerText = score;
+            
+            // Tính toán và hiển thị thứ hạng ngay khi vừa chết
+            window.updateCurrentRankDisplay();
 
             let isNewRecord = false;
             if(score > localHighScore) {
