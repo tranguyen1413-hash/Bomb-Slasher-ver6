@@ -1,0 +1,796 @@
+<!DOCTYPE html>
+<html lang="vi">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+    <title>Chém Bom Né Quả - Sấm Sét Edition</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script type="module">
+        // Firebase Setup & Logic
+        import { initializeApp } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-app.js';
+        import { getAuth, signInAnonymously, onAuthStateChanged, signInWithCustomToken } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-auth.js';
+        import { getFirestore, collection, addDoc, query, orderBy, limit, onSnapshot } from 'https://www.gstatic.com/firebasejs/11.6.1/firebase-firestore.js';
+
+        let db, auth, user, currentAppId;
+
+        // Initialize Firebase ONLY if config is available
+        if (typeof __firebase_config !== 'undefined' && __firebase_config) {
+            try {
+                const firebaseConfig = JSON.parse(__firebase_config);
+                const app = initializeApp(firebaseConfig);
+                auth = getAuth(app);
+                db = getFirestore(app);
+                currentAppId = typeof __app_id !== 'undefined' ? __app_id : 'bomb-ninja-v2';
+
+                // Auth
+                const initAuth = async () => {
+                    try {
+                        if (typeof __initial_auth_token !== 'undefined' && __initial_auth_token) {
+                            await signInWithCustomToken(auth, __initial_auth_token);
+                        } else {
+                            await signInAnonymously(auth);
+                        }
+                    } catch (e) {
+                        console.error("Auth error:", e);
+                    }
+                };
+                initAuth();
+
+                onAuthStateChanged(auth, (u) => {
+                    user = u;
+                    if (user) {
+                        loadGlobalLeaderboard();
+                    }
+                });
+            } catch (error) {
+                console.error("Firebase init failed:", error);
+            }
+        }
+
+        // --- Leaderboard Logic ---
+        let topScores = [];
+        window.isSubmittingScore = false;
+
+        function loadGlobalLeaderboard() {
+            if (!user || !db) return;
+            
+            // Theo luật: Fetch data then sort in memory, avoiding complex queries if possible, but for leaderboards a simple global collection fetch is needed.
+            const lbRef = collection(db, 'artifacts', currentAppId, 'public', 'data', 'leaderboard');
+            
+            onSnapshot(lbRef, (snapshot) => {
+                let scores = [];
+                snapshot.forEach(doc => {
+                    scores.push({ id: doc.id, ...doc.data() });
+                });
+                
+                // Sort in memory (Rule 2 workaround)
+                scores.sort((a, b) => b.score - a.score);
+                topScores = scores.slice(0, 5); // Take top 5
+                
+                renderLeaderboard();
+            }, (error) => {
+                console.error("Error fetching leaderboard:", error);
+                document.getElementById('leaderboardList').innerHTML = '<li class="text-gray-400 text-sm">Không tải được dữ liệu</li>';
+            });
+        }
+
+        function renderLeaderboard() {
+            const list = document.getElementById('leaderboardList');
+            if (topScores.length === 0) {
+                list.innerHTML = '<li class="text-gray-400 text-sm">Chưa có ai chơi, hãy là người đầu tiên!</li>';
+                return;
+            }
+            
+            list.innerHTML = topScores.map((s, index) => {
+                let badge = '';
+                if(index === 0) badge = '👑';
+                else if(index === 1) badge = '🥈';
+                else if(index === 2) badge = '🥉';
+                return `<li class="flex justify-between items-center py-1 border-b border-gray-700 last:border-0">
+                            <span class="text-gray-300 flex items-center gap-2">
+                                <span class="w-6 inline-block text-center">${badge || (index+1)}</span> 
+                                <span class="font-semibold truncate w-24 text-left">${s.name}</span>
+                            </span>
+                            <span class="text-yellow-400 font-bold">${s.score}</span>
+                        </li>`;
+            }).join('');
+        }
+
+        window.submitScore = async function(name, score) {
+            if (!user || !db || isSubmittingScore || !name.trim()) return false;
+            window.isSubmittingScore = true;
+            
+            try {
+                const lbRef = collection(db, 'artifacts', currentAppId, 'public', 'data', 'leaderboard');
+                await addDoc(lbRef, {
+                    name: name.substring(0, 15), // Limit length
+                    score: score,
+                    timestamp: new Date().getTime(),
+                    userId: user.uid
+                });
+                return true;
+            } catch (e) {
+                console.error("Lỗi lưu điểm:", e);
+                return false;
+            } finally {
+                window.isSubmittingScore = false;
+            }
+        };
+
+    </script>
+    <style>
+        body, html {
+            margin: 0;
+            padding: 0;
+            width: 100%;
+            height: 100%;
+            overflow: hidden;
+            background-color: #0f172a; /* Slate 900 */
+            touch-action: none;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            user-select: none;
+        }
+        #gameCanvas {
+            display: block;
+            width: 100%;
+            height: 100%;
+            box-shadow: inset 0 0 50px rgba(0,0,0,0.9);
+            background: radial-gradient(circle at center, #1e293b 0%, #020617 100%);
+        }
+        .ui-container {
+            position: absolute;
+            inset: 0;
+            pointer-events: none;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            padding: 1.5rem;
+        }
+        .interactive { pointer-events: auto; }
+        
+        .btn {
+            background: linear-gradient(135deg, #3b82f6 0%, #1d4ed8 100%);
+            box-shadow: 0 4px 15px rgba(59, 130, 246, 0.4);
+            transition: all 0.1s;
+        }
+        .btn:active { transform: scale(0.95); }
+        .btn-red {
+            background: linear-gradient(135deg, #ef4444 0%, #b91c1c 100%);
+            box-shadow: 0 4px 15px rgba(239, 68, 68, 0.4);
+        }
+
+        #damageOverlay {
+            position: absolute;
+            inset: 0;
+            background-color: rgba(239, 68, 68, 0.5);
+            opacity: 0;
+            transition: opacity 0.1s;
+            pointer-events: none;
+        }
+        .flash-damage { animation: flash 0.4s ease-out; }
+        @keyframes flash { 0% { opacity: 1; } 100% { opacity: 0; } }
+
+        /* Sấm sét overlay effect */
+        #lightningOverlay {
+            position: absolute;
+            inset: 0;
+            background-color: white;
+            opacity: 0;
+            pointer-events: none;
+        }
+        .flash-lightning { animation: lightningFlash 0.15s ease-out; }
+        @keyframes lightningFlash { 0% { opacity: 0.8; } 50% { opacity: 0; } 75% { opacity: 0.5; } 100% { opacity: 0; } }
+
+        /* Name input styling */
+        .name-input {
+            background: rgba(15, 23, 42, 0.8);
+            border: 2px solid #3b82f6;
+            color: white;
+            padding: 0.75rem;
+            border-radius: 0.5rem;
+            width: 100%;
+            text-align: center;
+            font-size: 1.25rem;
+            outline: none;
+        }
+        .name-input:focus { border-color: #60a5fa; box-shadow: 0 0 10px rgba(96, 165, 250, 0.5); }
+        
+        /* Leaderboard box */
+        .glass-panel {
+            background: rgba(30, 41, 59, 0.8);
+            backdrop-filter: blur(8px);
+            border: 1px solid rgba(255,255,255,0.1);
+        }
+    </style>
+</head>
+<body>
+
+    <div id="lightningOverlay"></div>
+    <div id="damageOverlay"></div>
+    <canvas id="gameCanvas"></canvas>
+
+    <div class="ui-container z-10" id="uiLayer">
+        
+        <!-- HUD -->
+        <div id="hud" class="flex justify-between items-start opacity-0 transition-opacity duration-300">
+            <div>
+                <div class="text-white font-bold text-3xl drop-shadow-md">
+                    Điểm: <span id="scoreText" class="text-yellow-400">0</span>
+                </div>
+                <div class="text-gray-400 text-sm font-semibold mt-1">
+                    Kỷ lục: <span id="highScoreTextHUD" class="text-blue-300">0</span>
+                </div>
+            </div>
+            <div class="flex gap-2" id="livesContainer"></div>
+        </div>
+
+        <!-- Screens -->
+        <div id="screenContainer" class="flex-1 flex items-center justify-center">
+            
+            <!-- Start Screen -->
+            <div id="startScreen" class="bg-gray-800 bg-opacity-95 p-6 md:p-8 rounded-2xl border-2 border-blue-500 text-center shadow-[0_0_30px_rgba(59,130,246,0.3)] max-w-md w-full mx-4 flex flex-col md:flex-row gap-6 interactive">
+                
+                <div class="flex-1">
+                    <h1 class="text-4xl md:text-5xl font-extrabold text-white mb-1 drop-shadow-lg tracking-tight">
+                        CHÉM <span class="text-red-500">BOM</span>
+                    </h1>
+                    <h2 class="text-xl md:text-2xl font-bold text-green-400 mb-4 drop-shadow-md">SẤM SÉT EDITION</h2>
+                    
+                    <div class="text-gray-300 mb-6 text-sm bg-gray-900 rounded-lg p-3 text-left">
+                        <p class="mb-1">🔪 <strong>Vuốt</strong> để chém đứt 💣.</p>
+                        <p class="mb-1 text-red-400">❌ Né hoa quả 🍎🍌🍉.</p>
+                        <p class="text-yellow-400">⚠️ Đừng để bom rơi!</p>
+                    </div>
+
+                    <button id="startBtn" class="btn text-white font-bold py-3 px-8 rounded-full text-xl w-full uppercase tracking-wider mb-4">
+                        Chơi Ngay
+                    </button>
+                    
+                    <div class="text-gray-400 text-sm font-semibold">
+                        Kỷ lục của bạn: <span id="highScoreTextStart" class="text-yellow-400 text-lg">0</span>
+                    </div>
+                </div>
+
+                <!-- Global Leaderboard Display -->
+                <div class="glass-panel p-4 rounded-xl flex-1 flex flex-col min-w-[200px]">
+                    <h3 class="text-blue-400 font-bold mb-3 border-b border-blue-500/30 pb-2">🏆 TOP NINJA</h3>
+                    <ul id="leaderboardList" class="flex-1 flex flex-col justify-start text-sm overflow-y-auto">
+                        <li class="text-gray-500 italic">Đang tải...</li>
+                    </ul>
+                </div>
+            </div>
+
+            <!-- Game Over Screen -->
+            <div id="gameOverScreen" class="hidden bg-gray-900 bg-opacity-95 p-8 rounded-2xl border-2 border-red-500 text-center shadow-[0_0_40px_rgba(239,68,68,0.4)] max-w-sm w-full mx-4 transform scale-95 transition-transform duration-300 interactive">
+                <h1 class="text-4xl font-extrabold text-red-500 mb-2 drop-shadow-lg uppercase">Thua Rồi!</h1>
+                <p class="text-gray-300 text-lg">Điểm của bạn</p>
+                <div class="text-6xl font-black text-yellow-400 mb-2 drop-shadow-lg" id="finalScore">0</div>
+                
+                <div id="newRecordMsg" class="hidden text-green-400 font-bold animate-pulse mb-4">
+                    🎉 CHÚC MỪNG KỶ LỤC MỚI! 🎉
+                </div>
+
+                <div id="submitScoreForm" class="hidden mb-6">
+                    <input type="text" id="playerName" class="name-input mb-3" placeholder="Nhập tên của bạn" maxlength="12">
+                    <button id="submitNameBtn" class="btn text-white font-bold py-2 px-6 rounded-lg w-full">Ghi Danh Bảng Vàng</button>
+                    <p id="submitStatus" class="text-xs text-gray-400 mt-2"></p>
+                </div>
+
+                <button id="restartBtn" class="btn btn-red text-white font-bold py-3 px-8 rounded-full text-xl w-full uppercase tracking-wider mt-2">
+                    Chơi Lại
+                </button>
+            </div>
+
+        </div>
+    </div>
+
+    <script>
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        
+        // DOM Elements
+        const screens = {
+            container: document.getElementById('screenContainer'),
+            start: document.getElementById('startScreen'),
+            gameOver: document.getElementById('gameOverScreen'),
+            hud: document.getElementById('hud')
+        };
+        const texts = {
+            score: document.getElementById('scoreText'),
+            finalScore: document.getElementById('finalScore'),
+            highScoreHUD: document.getElementById('highScoreTextHUD'),
+            highScoreStart: document.getElementById('highScoreTextStart')
+        };
+        const overlays = {
+            damage: document.getElementById('damageOverlay'),
+            lightning: document.getElementById('lightningOverlay')
+        };
+        
+        const livesContainer = document.getElementById('livesContainer');
+        const submitForm = document.getElementById('submitScoreForm');
+        const playerNameInput = document.getElementById('playerName');
+        const newRecordMsg = document.getElementById('newRecordMsg');
+
+        // Game State
+        let state = 'START';
+        let score = 0;
+        let lives = 3;
+        let frame = 0;
+        let shake = 0;
+        let localHighScore = localStorage.getItem('bombNinjaHighScore') || 0;
+        
+        texts.highScoreStart.innerText = localHighScore;
+        texts.highScoreHUD.innerText = localHighScore;
+
+        // Arrays
+        let targets = [];
+        let particles = [];
+        let lightnings = []; // Sét
+        let halves = []; // Mảnh trái cây vỡ
+        let slicePts = [];
+        let isSlicing = false;
+
+        const FRUITS = ['🍎', '🍉', '🍌', '🍓', '🍇', '🍍', '🥥', '🥝'];
+        const BOMB = '💣';
+
+        function resize() {
+            canvas.width = window.innerWidth;
+            canvas.height = window.innerHeight;
+        }
+        window.addEventListener('resize', resize);
+        resize();
+
+        // --- Math Utils ---
+        const rnd = (min, max) => Math.random() * (max - min) + min;
+        const distSq = (p1, p2) => (p1.x - p2.x)**2 + (p1.y - p2.y)**2;
+        const distToSegmentSq = (p, v, w) => {
+            let l2 = distSq(v, w);
+            if (l2 === 0) return distSq(p, v);
+            let t = ((p.x - v.x) * (w.x - v.x) + (p.y - v.y) * (w.y - v.y)) / l2;
+            t = Math.max(0, Math.min(1, t));
+            return distSq(p, { x: v.x + t * (w.x - v.x), y: v.y + t * (w.y - v.y) });
+        };
+
+        // --- Classes ---
+
+        class Target {
+            constructor() {
+                this.r = Math.min(canvas.width, canvas.height) * 0.08;
+                this.x = rnd(this.r * 2, canvas.width - this.r * 2);
+                this.y = canvas.height + this.r;
+                this.vx = rnd(-2, 2);
+                
+                // Base velocity depends on height, plus difficulty factor
+                let speedScale = canvas.height / 800;
+                let diffFactor = Math.min(1.5, 1 + (score / 200)); // Càng điểm cao ném càng mạnh
+                this.vy = rnd(-17, -13) * speedScale * diffFactor;
+                
+                this.isBomb = Math.random() < 0.65; // 65% bom
+                this.emoji = this.isBomb ? BOMB : FRUITS[Math.floor(Math.random() * FRUITS.length)];
+                
+                this.rot = 0;
+                this.rotSpd = rnd(-0.1, 0.1);
+                this.dead = false;
+            }
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.vy += 0.22; // Gravity
+                this.rot += this.rotSpd;
+            }
+            draw() {
+                ctx.save();
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rot);
+                ctx.font = `${this.r * 1.5}px Arial`;
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                
+                // Glow cho bom
+                if(this.isBomb) {
+                    ctx.shadowColor = 'rgba(239, 68, 68, 0.8)';
+                    ctx.shadowBlur = 15;
+                } else {
+                    ctx.shadowColor = 'rgba(0,0,0,0.5)';
+                    ctx.shadowBlur = 5;
+                }
+                
+                ctx.fillText(this.emoji, 0, 0);
+                ctx.restore();
+            }
+        }
+
+        class HalfFruit {
+            constructor(x, y, emoji, isLeft) {
+                this.x = x;
+                this.y = y;
+                this.emoji = emoji;
+                this.isLeft = isLeft;
+                this.vx = isLeft ? rnd(-4, -2) : rnd(2, 4);
+                this.vy = rnd(-5, 0);
+                this.rot = 0;
+                this.rotSpd = isLeft ? -0.1 : 0.1;
+                this.life = 1;
+            }
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                this.vy += 0.3; // Rớt nhanh hơn vật thể thường
+                this.rot += this.rotSpd;
+                this.life -= 0.015;
+            }
+            draw() {
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, this.life);
+                ctx.translate(this.x, this.y);
+                ctx.rotate(this.rot);
+                
+                ctx.font = `50px Arial`; // Kích thước cố định cho nửa quả
+                ctx.textAlign = 'center';
+                ctx.textBaseline = 'middle';
+                
+                // Cắt nửa quả bằng clip()
+                ctx.beginPath();
+                if(this.isLeft) {
+                    ctx.rect(-50, -50, 50, 100);
+                } else {
+                    ctx.rect(0, -50, 50, 100);
+                }
+                ctx.clip();
+                
+                ctx.fillText(this.emoji, 0, 0);
+                ctx.restore();
+            }
+        }
+
+        class Particle {
+            constructor(x, y, colors, speedMult = 1, isLiquid = false) {
+                this.x = x;
+                this.y = y;
+                let ang = rnd(0, Math.PI * 2);
+                let spd = rnd(2, 10) * speedMult;
+                this.vx = Math.cos(ang) * spd;
+                this.vy = Math.sin(ang) * spd;
+                this.size = rnd(2, 6);
+                this.color = colors[Math.floor(Math.random() * colors.length)];
+                this.life = 1;
+                this.decay = rnd(0.02, 0.05);
+                this.isLiquid = isLiquid;
+            }
+            update() {
+                this.x += this.vx;
+                this.y += this.vy;
+                if(this.isLiquid) this.vy += 0.2; // Rơi xuống như nước ép
+                this.life -= this.decay;
+                this.size *= 0.95; // Nhỏ dần
+            }
+            draw() {
+                ctx.save();
+                ctx.globalAlpha = Math.max(0, this.life);
+                ctx.beginPath();
+                ctx.arc(this.x, this.y, this.size, 0, Math.PI * 2);
+                ctx.fillStyle = this.color;
+                if(!this.isLiquid) {
+                    ctx.shadowColor = this.color;
+                    ctx.shadowBlur = 10;
+                }
+                ctx.fill();
+                ctx.restore();
+            }
+        }
+
+        class LightningNode {
+            constructor(startX, startY, endX, endY) {
+                this.segments = [];
+                this.life = 1;
+                this.generate(startX, startY, endX, endY);
+            }
+            generate(x1, y1, x2, y2) {
+                let dist = Math.sqrt((x2-x1)**2 + (y2-y1)**2);
+                if(dist < 20) {
+                    this.segments.push({x1, y1, x2, y2});
+                    return;
+                }
+                let midX = (x1 + x2) / 2 + rnd(-dist/4, dist/4);
+                let midY = (y1 + y2) / 2 + rnd(-dist/4, dist/4);
+                this.generate(x1, y1, midX, midY);
+                this.generate(midX, midY, x2, y2);
+            }
+            update() { this.life -= 0.1; }
+            draw() {
+                if(this.life <= 0) return;
+                ctx.save();
+                ctx.globalAlpha = this.life;
+                ctx.beginPath();
+                this.segments.forEach(s => {
+                    ctx.moveTo(s.x1, s.y1);
+                    ctx.lineTo(s.x2, s.y2);
+                });
+                ctx.strokeStyle = '#60a5fa'; // Blue
+                ctx.lineWidth = 3;
+                ctx.shadowColor = '#fff';
+                ctx.shadowBlur = 10;
+                ctx.stroke();
+                
+                // Core
+                ctx.strokeStyle = '#fff';
+                ctx.lineWidth = 1;
+                ctx.shadowBlur = 0;
+                ctx.stroke();
+                ctx.restore();
+            }
+        }
+
+        // --- Logic Functions ---
+
+        function spawn() {
+            let rate = Math.max(20, 80 - (score / 10)); // Càng nhiều điểm ra càng nhanh
+            if (frame % Math.floor(rate) === 0) targets.push(new Target());
+        }
+
+        function createVFX(x, y, type, emoji = '') {
+            if (type === 'BOMB') {
+                // Nổ bom
+                const colors = ['#ef4444', '#f59e0b', '#fbbf24', '#ffffff'];
+                for (let i = 0; i < 40; i++) particles.push(new Particle(x, y, colors, 1.5));
+                
+                // Tia sét tỏa ra
+                for(let i=0; i<3; i++) {
+                    let endX = x + rnd(-150, 150);
+                    let endY = y + rnd(-150, 150);
+                    lightnings.push(new LightningNode(x, y, endX, endY));
+                }
+                
+                shake = 15;
+                overlays.lightning.classList.remove('flash-lightning');
+                void overlays.lightning.offsetWidth;
+                overlays.lightning.classList.add('flash-lightning');
+                
+            } else if (type === 'FRUIT') {
+                // Nước ép bắn ra
+                const colors = ['#ec4899', '#8b5cf6', '#10b981', '#f43f5e'];
+                for (let i = 0; i < 20; i++) particles.push(new Particle(x, y, colors, 0.8, true));
+                
+                // Cắt quả làm đôi
+                halves.push(new HalfFruit(x, y, emoji, true));
+                halves.push(new HalfFruit(x, y, emoji, false));
+            }
+        }
+
+        function takeDamage() {
+            lives--;
+            updateHUD();
+            
+            overlays.damage.classList.remove('flash-damage');
+            void overlays.damage.offsetWidth;
+            overlays.damage.classList.add('flash-damage');
+
+            if (lives <= 0) endGame();
+        }
+
+        function checkHit() {
+            if (slicePts.length < 2) return;
+            let p1 = slicePts[slicePts.length - 2];
+            let p2 = slicePts[slicePts.length - 1];
+
+            for (let i = targets.length - 1; i >= 0; i--) {
+                let t = targets[i];
+                if (distToSegmentSq({x: t.x, y: t.y}, p1, p2) < (t.r * t.r)) {
+                    // Trúng
+                    t.dead = true;
+                    if (t.isBomb) {
+                        score += 10;
+                        texts.score.innerText = score;
+                        createVFX(t.x, t.y, 'BOMB');
+                    } else {
+                        // Chém nhầm
+                        createVFX(t.x, t.y, 'FRUIT', t.emoji);
+                        takeDamage();
+                    }
+                }
+            }
+        }
+
+        function update() {
+            if (state !== 'PLAY') return;
+            frame++;
+            spawn();
+
+            // Targets
+            for (let i = targets.length - 1; i >= 0; i--) {
+                let t = targets[i];
+                t.update();
+                if (t.y > canvas.height + t.r + 20) {
+                    if (t.isBomb && !t.dead) takeDamage(); // Miss bomb = damage
+                    t.dead = true;
+                }
+                if (t.dead) targets.splice(i, 1);
+            }
+
+            // Particles & Halves
+            [particles, halves, lightnings].forEach(arr => {
+                for (let i = arr.length - 1; i >= 0; i--) {
+                    arr[i].update();
+                    if (arr[i].life <= 0) arr.splice(i, 1);
+                }
+            });
+
+            if (shake > 0) shake--;
+        }
+
+        function draw() {
+            ctx.clearRect(0, 0, canvas.width, canvas.height);
+
+            ctx.save();
+            if (shake > 0) ctx.translate(rnd(-12, 12), rnd(-12, 12));
+
+            // Draw arrays
+            targets.forEach(t => t.draw());
+            halves.forEach(h => h.draw());
+            particles.forEach(p => p.draw());
+            lightnings.forEach(l => l.draw());
+
+            ctx.restore();
+
+            // Sợi kiếm phát sáng (Neon Sword)
+            if (slicePts.length > 1) {
+                ctx.beginPath();
+                ctx.moveTo(slicePts[0].x, slicePts[0].y);
+                for (let i = 1; i < slicePts.length; i++) ctx.lineTo(slicePts[i].x, slicePts[i].y);
+                
+                // Lõi trắng
+                ctx.strokeStyle = '#ffffff';
+                ctx.lineWidth = 4;
+                ctx.lineCap = 'round';
+                ctx.lineJoin = 'round';
+                
+                // Hào quang xanh
+                ctx.shadowColor = '#0ea5e9'; // Tailwind sky-500
+                ctx.shadowBlur = 20;
+                ctx.stroke();
+                
+                ctx.lineWidth = 8;
+                ctx.strokeStyle = 'rgba(14, 165, 233, 0.4)';
+                ctx.stroke();
+                
+                ctx.shadowBlur = 0;
+            }
+
+            // Xóa đuôi kiếm
+            if (slicePts.length > 0 && !isSlicing) slicePts.shift();
+            else if (slicePts.length > 12) slicePts.shift();
+        }
+
+        function loop() {
+            update();
+            draw();
+            requestAnimationFrame(loop);
+        }
+
+        // --- Inputs ---
+        function addPt(e) {
+            let x = e.touches ? e.touches[0].clientX : e.clientX;
+            let y = e.touches ? e.touches[0].clientY : e.clientY;
+            slicePts.push({x, y});
+        }
+        
+        function inputStart(e) {
+            if (state !== 'PLAY') return;
+            isSlicing = true;
+            slicePts = [];
+            addPt(e);
+        }
+        function inputMove(e) {
+            if (!isSlicing || state !== 'PLAY') return;
+            e.preventDefault();
+            addPt(e);
+            checkHit();
+        }
+        function inputEnd() { isSlicing = false; }
+
+        canvas.addEventListener('mousedown', inputStart);
+        canvas.addEventListener('mousemove', inputMove);
+        window.addEventListener('mouseup', inputEnd);
+        canvas.addEventListener('touchstart', inputStart, { passive: false });
+        canvas.addEventListener('touchmove', inputMove, { passive: false });
+        window.addEventListener('touchend', inputEnd);
+
+        // --- UI Flow ---
+        function updateHUD() {
+            livesContainer.innerHTML = '';
+            for(let i=0; i<3; i++) {
+                livesContainer.innerHTML += `<span class="text-3xl drop-shadow-md transform transition-transform ${i<lives ? 'scale-100' : 'scale-50 opacity-30'}">${i<lives ? '💖' : '🖤'}</span>`;
+            }
+        }
+
+        function startPlay() {
+            state = 'PLAY';
+            score = 0; lives = 3; frame = 0;
+            targets = []; particles = []; halves = []; lightnings = []; slicePts = [];
+            
+            texts.score.innerText = '0';
+            updateHUD();
+
+            screens.container.classList.add('hidden');
+            screens.start.classList.add('hidden');
+            screens.gameOver.classList.add('hidden');
+            screens.hud.classList.remove('opacity-0');
+            document.body.style.cursor = 'crosshair';
+            
+            // Hide submit form
+            submitForm.classList.add('hidden');
+            newRecordMsg.classList.add('hidden');
+            document.getElementById('submitStatus').innerText = '';
+        }
+
+        function endGame() {
+            state = 'GAMEOVER';
+            document.body.style.cursor = 'default';
+            screens.hud.classList.add('opacity-0');
+            screens.container.classList.remove('hidden');
+            screens.gameOver.classList.remove('hidden');
+            
+            setTimeout(() => {
+                screens.gameOver.classList.remove('scale-95');
+                screens.gameOver.classList.add('scale-100');
+            }, 50);
+
+            texts.finalScore.innerText = score;
+
+            // Handle Highscore
+            let isNewRecord = false;
+            if(score > localHighScore) {
+                localHighScore = score;
+                localStorage.setItem('bombNinjaHighScore', localHighScore);
+                texts.highScoreHUD.innerText = localHighScore;
+                texts.highScoreStart.innerText = localHighScore;
+                isNewRecord = true;
+            }
+
+            if(isNewRecord && score > 0) {
+                newRecordMsg.classList.remove('hidden');
+                submitForm.classList.remove('hidden');
+            }
+        }
+
+        document.getElementById('startBtn').addEventListener('click', startPlay);
+        document.getElementById('restartBtn').addEventListener('click', startPlay);
+        
+        // Submit Score Event
+        document.getElementById('submitNameBtn').addEventListener('click', async () => {
+            const name = playerNameInput.value;
+            const btn = document.getElementById('submitNameBtn');
+            const status = document.getElementById('submitStatus');
+            
+            if(!name.trim()) {
+                status.innerText = "Vui lòng nhập tên hợp lệ!";
+                status.className = "text-xs text-red-400 mt-2";
+                return;
+            }
+            
+            btn.innerText = "Đang gửi...";
+            btn.disabled = true;
+            
+            const success = await window.submitScore(name, score);
+            
+            if(success) {
+                submitForm.classList.add('hidden');
+                status.innerText = "Đã lưu tên vào Bảng Vàng!";
+                status.className = "text-sm text-green-400 font-bold mt-2";
+                status.style.display = 'block'; // Make sure it's visible outside form
+                screens.gameOver.insertBefore(status, document.getElementById('restartBtn'));
+            } else {
+                btn.innerText = "Ghi Danh Bảng Vàng";
+                btn.disabled = false;
+                status.innerText = "Lỗi mạng, vui lòng thử lại!";
+                status.className = "text-xs text-red-400 mt-2";
+            }
+        });
+
+        // Start Loop
+        requestAnimationFrame(loop);
+        updateHUD();
+
+    </script>
+</body>
+</html>
